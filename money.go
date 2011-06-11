@@ -251,7 +251,9 @@ func DecimalChange(d int) {
 
 // Div Divides one Money type from another
 func (m *Money) Div(n *Money) *Money {
-	return m.Set(m.M * Guard * DP / n.M / Guard)
+ 	f := Guardf * DPf * float64(m.M) / float64(n.M) / Guardf
+	i := int64(f)
+	return m.Set(Rnd(i, f-float64(i)))
 }
 
 // FVA Future Value of an Annuity
@@ -381,9 +383,8 @@ func (m *Money) Mul(n *Money) *Money {
 // Mulf Multiplies a Money with a float to return a money-stored type
 func (m *Money) Mulf(f float64) *Money {
 	i := m.M * int64(f*Guardf*DPf)
-	r := i/Guard/ DP
-	r = Rnd(r, float64(i-r*Guard*DP))
-	return m.Set(r)
+	r := i/Guard/DP
+	return m.Set(Rnd(r,float64(i) / Guardf / DPf - float64(r)))
 }
 
 // Neg Returns the negative value of Money
@@ -529,6 +530,8 @@ func R(x, y []float64) (a, b, r float64) {
 }
 
 // Round Rounds int64 remainder if greater than Round (or lt Roundn- neg.)
+// trunc = the remainder of the float64 calc
+// r     = the result of the int64 cal
 func Rnd(r int64, trunc float64) int64 {
 	if trunc > 0 {
 		if trunc > Round {
