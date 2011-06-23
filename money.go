@@ -49,6 +49,8 @@ Gett gets value of money truncating after DP (see Value() for no truncation)
 	(m *Money) Gett() int64 
 Get gets the float64 value of money (see Value() for int64)
 	(m *Money) Get() float64 
+GetQuote obtains a security quote
+	(q *Quote) GetQuote(t, e string) *Quote
 Interest 
 	(m *Money) Interest(r float64, n int) (m *Money) 
 I Interest (of 1 value returned) for n periods
@@ -87,7 +89,7 @@ PVP Present Value (of an integer period)
 	(m *Money) PVP(r float64, n, pd int) *Money 
 R Regression 
 	R(x, y []float64) (a, b, r float64) 
-Round Rounds int64 remainder if greater than Round
+RND Rounds int64 remainder if greater than Round
 	Rnd(r int64, trunc float64) int64 
 SD Standard Deviation
 	SD(a []float64) float64 
@@ -109,24 +111,70 @@ Value returns in int64 the value of Money (also see Gett, See Get() for float64)
 
 import (
 	"fmt"
+	"http"
+	"io/ioutil"
 	"math"
+	"strconv"
+	"time"
 )
 
 type Money struct {
 	M int64 // value of the integer64 Money
 }
 
-var (
-	Guardi int     = 1000 // must be at least the size of StringD() max
-	Guard  int64   = int64(Guardi)
-	Guardf float64 = float64(Guardi)
-	DP     int64   = 100         // for default of 2 decimal places => 10^2 (can be reset)
-	DPf    float64 = float64(DP) // for default of 2 decimal places => 10^2 (can be reset)
-	Round  = .5 + (1 / Guardf)
-	Roundn = Round * -1
-)
+type Quote struct {
+	ID        string
+	Ticker    string
+	Exchange  string
+	Price     Money
+	PriceCur  Money
+	S         string
+	LTT       time.Time // last trade
+	LT        time.Time // last trade
+	Change    Money
+	ChangePct float64
+	CCOL      string
+	EL        Money // after hours
+	ELCurrent Money // after hours price
+	ELT       time.Time   // after hours time
+	EC        Money // after hours price change
+	ECP       float64     // after hours percent change
+	ECCOL     string      // chb
+	Dividend  Money
+	Yield     float64
+	Other     string // forecol
+}
+
+var qPos = map[string]int{"id": 0, // Quote position
+	"t":      1,
+	"e":      2,
+	"l":      3,
+	"l_cur":  4,
+	"s":      5,
+	"ltt":    6,
+	"lt":     7,
+	"c":      8,
+	"cp":     9,
+	"ccol":   10,
+	"el":     11,
+	"el_cur": 12,
+	"elt":    13,
+	"ec":     14,
+	"ecp":    15,
+	"eccol":  16,
+	"div":    17,
+	"yld":    18,
+}
 
 var (
+	Guardi int     = 100
+	Guard  int64   = int64(Guardi)
+	Guardf float64 = float64(Guardi)
+	DP     int64   = 100        // for default of 2 decimal places => 10^2 (can be reset)
+	DPf    float64 = float64(DP) // for default of 2 decimal places => 10^2 (can be reset)
+	Round  = .5 
+//	Round  = .5 + (1 / Guardf)
+	Roundn = Round * -1
 	call string = "c"
 	put  string = "p"
 )
@@ -143,6 +191,18 @@ const (
 	UND     = "Undefined Number: non a number, or infinity"
 	STRCONE = "String Conversion error"
 	MAXDEC  = 18
+)
+
+const (	// for GetQuote
+	DOUBLEQUOTE byte   = 34
+	COLONBYTE   byte   = 58
+	COLON       string = string(COLONBYTE)
+	QUOTEURL    string = "http://finance.google.com/finance/info?client=ig&q="
+	QLTTTIME    string = "3:04PM MST"
+	QLTTIME     string = "Jan 02, 3:04PM MST"
+	UNABLE      string = "Unable to convert "
+	BADQUOTE    string = "Quote read is bad or invalid"
+	QUOTEFAIL   string = "Bad read or quote not found for "
 )
 
 // Abs Returns the absolute value of Money
@@ -310,6 +370,14 @@ func (m *Money) Gett() int64 {
 // Get gets the float64 value of money (see Value() for int64)
 func (m *Money) Get() float64 {
 	return float64(m.M) / DPf
+}
+
+// GetQuote obtains a security quote of type Quote
+// q = Quote 
+// t = the string ticker ex. "GOOG" "VTI"
+// e = the string exchange ex. "NASDAQ" "NYSE"
+func (q *Quote) GetQuote(t, e string) *Quote {
+	return q.parseQuote(getQuotePage(e, t))
 }
 
 // Interest 
@@ -529,12 +597,14 @@ func R(x, y []float64) (a, b, r float64) {
 	return a, b, r
 }
 
-// Round Rounds int64 remainder if greater than Round (or lt Roundn- neg.)
+// RND rounds int64 remainder rounded half towards plus infinity
 // trunc = the remainder of the float64 calc
 // r     = the result of the int64 cal
 func Rnd(r int64, trunc float64) int64 {
+
+//fmt.Printf("RND 1 r = % v, trunc = %v Round = %v\n", r, trunc, Round)
 	if trunc > 0 {
-		if trunc > Round {
+		if trunc >= Round {
 			r++
 		}
 	} else {
@@ -542,6 +612,7 @@ func Rnd(r int64, trunc float64) int64 {
 			r--
 		}
 	}
+//fmt.Printf("RND 2 r = % v, trunc = %v Round = %v\n", r, trunc, Round)
 	return r
 }
 
@@ -612,4 +683,183 @@ func (m *Money) Sub(n *Money) *Money {
 // Value returns in int64 the value of Money (also see Gett(), See Get() for float64)
 func (m *Money) Value() int64 {
 	return m.M
+}
+
+// worker funcs for GetQuote
+
+func now() (t time.Time) {
+	lt := time.LocalTime()
+	t.Year    = lt.Year
+	t.Month   = lt.Month
+	t.Weekday = lt.Weekday
+	t.Day     = lt.Day
+	return t
+}
+
+func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
+	if bVal == nil {
+		return q
+	}
+	bStr := string(bKey)
+	for fld, v := range qPos {
+		if bStr == fld {
+			switch v {
+			case 0:
+				q.ID = string(bVal)
+			case 1:
+				q.Ticker = string(bVal)
+			case 2:
+				q.Exchange = string(bVal)
+			case 3:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.Price.Setf(f)
+			case 4:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.PriceCur.Setf(f)
+			case 5:
+				q.S = string(bVal)
+			case 6:
+				t, err := time.Parse(QLTTTIME, string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.LTT = now()
+				q.LTT.Hour   = t.Hour
+				q.LTT.Minute = t.Minute
+				q.LTT.Zone   = t.Zone
+			case 7:
+				t, err := time.Parse(QLTTIME, string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.LT = now()
+				q.LT.Month  = t.Month
+				q.LT.Day    = t.Day
+				q.LT.Hour   = t.Hour
+				q.LT.Minute = t.Minute
+				q.LT.Zone   = t.Zone
+			case 8:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.Change.Setf(f)
+			case 9:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.ChangePct = f
+			case 10:
+				q.CCOL = string(bVal)
+			case 11:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.EL.Setf(f)
+			case 12:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.ELCurrent.Setf(f)
+			case 13:
+				t, err := time.Parse(QLTTIME, string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.ELT = now()
+				q.ELT.Month  = t.Month
+				q.ELT.Day    = t.Day
+				q.ELT.Hour   = t.Hour
+				q.ELT.Minute = t.Minute
+				q.ELT.Zone   = t.Zone
+			case 14:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.EC.Setf(f)
+			case 15:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + string(bVal))
+				}
+				q.ECP = f
+			case 16:
+				q.ECCOL = string(bVal)
+			case 17:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + err.String() + " " + string(bVal))
+				}
+				q.Dividend.Setf(f)
+			case 18:
+				f, err := strconv.Atof64(string(bVal))
+				if err != nil {
+					panic(UNABLE + fld + " " + err.String() + " " + string(bVal))
+				}
+				q.Yield = f
+			}
+			return q
+		}
+	}
+	panic("no valid symbol loaded list for " + bStr)
+}
+
+func (s *Quote) parseQuote(b []byte) *Quote {
+	var bKey, bVal []byte
+	var pos int
+	for pos < len(b) {
+		if b[pos] == DOUBLEQUOTE {
+			if bKey == nil {
+				pos++
+				if pos == len(b) {
+					panic(BADQUOTE)
+				}
+				for b[pos] != DOUBLEQUOTE {
+					bKey = append(bKey, b[pos])
+					pos++
+					if pos == len(b) {
+						panic(BADQUOTE)
+					}
+				}
+			} else if bVal == nil {
+				pos++
+				if pos == len(b) {
+					panic(BADQUOTE)
+				}
+				for b[pos] != DOUBLEQUOTE {
+					bVal = append(bVal, b[pos])
+					pos++
+					if pos == len(b) {
+						panic(BADQUOTE)
+					}
+				}
+				s.quoteFields(bKey, bVal)
+				bKey, bVal = nil, nil
+			}
+		}
+		pos++
+	}
+	return s
+}
+
+func getQuotePage(t, e string) []byte {
+	var b []byte
+//	r, _, err := http.Get(QUOTEURL + e + COLON + t)  // http.Get with re-direct
+	r, err := http.Get(QUOTEURL + e + COLON + t) 
+	if err != nil {
+		panic(QUOTEFAIL + e + " " + t)
+	}
+	defer r.Body.Close()
+	b, _ = ioutil.ReadAll(r.Body)
+	return b
 }
