@@ -7,6 +7,7 @@ type Money struct {
 	M	int64
 }
 
+
 ...which usese a fixed-length guard for precision arithmetic: the 
 int64 variable Guard (and its float64 and int-related variables Guardf
 and Guardi.
@@ -111,7 +112,7 @@ Value returns in int64 the value of Money (also see Gett, See Get() for float64)
 
 import (
 	"fmt"
-	"http"
+	"net/http"
 	"io/ioutil"
 	"math"
 	"strconv"
@@ -122,6 +123,18 @@ type Money struct {
 	M int64 // value of the integer64 Money
 }
 
+// parsedTime is the struct representing a parsed time value.
+type parsedTime struct {
+    		Year                 int
+    		Month                time.Month
+    		Day                  int
+    		Hour, Minute, Second int // 15:04:05 is 15, 4, 5.
+    		Nanosecond           int // Fractional second.
+    		Weekday              time.Weekday
+    		ZoneOffset           int    // seconds east of UTC, e.g. -7*60*60 for -0700
+    		Zone                 string // e.g., "MST"
+}
+
 type Quote struct {
 	ID        string
 	Ticker    string
@@ -129,14 +142,14 @@ type Quote struct {
 	Price     Money
 	PriceCur  Money
 	S         string
-	LTT       time.Time // last trade
-	LT        time.Time // last trade
+	LTT       parsedTime // last trade
+	LT        parsedTime // last trade
 	Change    Money
 	ChangePct float64
 	CCOL      string
 	EL        Money // after hours
 	ELCurrent Money // after hours price
-	ELT       time.Time   // after hours time
+	ELT       parsedTime   // after hours time
 	EC        Money // after hours price change
 	ECP       float64     // after hours percent change
 	ECCOL     string      // chb
@@ -687,14 +700,19 @@ func (m *Money) Value() int64 {
 
 // worker funcs for GetQuote
 
-func now() (t time.Time) {
-	lt := time.LocalTime()
-	t.Year    = lt.Year
-	t.Month   = lt.Month
-	t.Weekday = lt.Weekday
-	t.Day     = lt.Day
+func now() (t parsedTime) {
+	lt := time.Now().Local()
+	t.Year    = lt.Year()
+	t.Month   = lt.Month()
+	t.Weekday = lt.Weekday()
+	t.Day     = lt.Day()
+        t.Zone,_ = lt.Zone()
 	return t
 }
+
+
+
+
 
 func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 	if bVal == nil {
@@ -711,13 +729,13 @@ func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 			case 2:
 				q.Exchange = string(bVal)
 			case 3:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.Price.Setf(f)
 			case 4:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
@@ -730,28 +748,28 @@ func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.LTT = now()
-				q.LTT.Hour   = t.Hour
-				q.LTT.Minute = t.Minute
-				q.LTT.Zone   = t.Zone
+				q.LTT.Hour   = t.Hour()
+				q.LTT.Minute = t.Minute()
+				q.LTT.Zone,_   = t.Zone()
 			case 7:
 				t, err := time.Parse(QLTTIME, string(bVal))
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.LT = now()
-				q.LT.Month  = t.Month
-				q.LT.Day    = t.Day
-				q.LT.Hour   = t.Hour
-				q.LT.Minute = t.Minute
-				q.LT.Zone   = t.Zone
+				q.LT.Month  = t.Month()
+				q.LT.Day    = t.Day()
+				q.LT.Hour   = t.Hour()
+				q.LT.Minute = t.Minute()
+				q.LT.Zone,_   = t.Zone()
 			case 8:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.Change.Setf(f)
 			case 9:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
@@ -759,13 +777,13 @@ func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 			case 10:
 				q.CCOL = string(bVal)
 			case 11:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.EL.Setf(f)
 			case 12:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
@@ -776,19 +794,19 @@ func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.ELT = now()
-				q.ELT.Month  = t.Month
-				q.ELT.Day    = t.Day
-				q.ELT.Hour   = t.Hour
-				q.ELT.Minute = t.Minute
-				q.ELT.Zone   = t.Zone
+				q.ELT.Month  = t.Month()
+				q.ELT.Day    = t.Day()
+				q.ELT.Hour   = t.Hour()
+				q.ELT.Minute = t.Minute()
+				q.ELT.Zone,_ = t.Zone()
 			case 14:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
 				q.EC.Setf(f)
 			case 15:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
 					panic(UNABLE + fld + " " + string(bVal))
 				}
@@ -796,15 +814,15 @@ func (q *Quote) quoteFields(bKey, bVal []byte) *Quote {
 			case 16:
 				q.ECCOL = string(bVal)
 			case 17:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
-					panic(UNABLE + fld + " " + err.String() + " " + string(bVal))
+					panic(UNABLE + fld + " " + err.Error() + " " + string(bVal))
 				}
 				q.Dividend.Setf(f)
 			case 18:
-				f, err := strconv.Atof64(string(bVal))
+				f, err := strconv.ParseFloat(string(bVal),64)
 				if err != nil {
-					panic(UNABLE + fld + " " + err.String() + " " + string(bVal))
+					panic(UNABLE + fld + " " + err.Error() + " " + string(bVal))
 				}
 				q.Yield = f
 			}
